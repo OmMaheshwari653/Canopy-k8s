@@ -4,7 +4,7 @@ kind: Kustomization
 namespace: canopy-prod
 
 resources:
-  - ../../base
+- ../../base
 
 # *** In prod, images come from a REGISTRY and are never tagged `latest` ***
 # The tag is the git commit SHA, which means:
@@ -13,12 +13,12 @@ resources:
 #   - CI bumps it automatically
 # With `latest` you cannot even answer "which commit is running in prod?".
 images:
-  - name: canopy-server
-    newName: ghcr.io/ommaheshwari653/canopy-server
-    newTag: main-0000000 # replaced by CI
-  - name: canopy-client
-    newName: ghcr.io/ommaheshwari653/canopy-client
-    newTag: main-0000000
+- name: canopy-client
+  newName: ghcr.io/ommaheshwari653/canopy-client
+  newTag: main-0cc32d3
+- name: canopy-server
+  newName: ghcr.io/ommaheshwari653/canopy-server
+  newTag: main-0000000
 
 patches:
-  - path: patch-prod.yaml
+- path: patch-prod.yaml
