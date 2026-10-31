@@ -55,10 +55,17 @@ spec:
         factor: 2
         maxDuration: 3m
 
-  # Some fields are owned by controllers rather than Git. Ignore them in the
-  # diff, or the Application shows as permanently OutOfSync.
-  ignoreDifferences:
-    - group: apps
-      kind: Deployment
-      jsonPointers:
-        - /spec/replicas # the HPA owns this, not Git
+  # NOTE: there is deliberately no `ignoreDifferences` for /spec/replicas here.
+  #
+  # Ignoring it is only correct when an HPA owns the replica count - otherwise
+  # Argo CD and the HPA fight each other, and the Application sits permanently
+  # OutOfSync. The dev overlay DELETES the HPA, so nothing else owns replicas
+  # and Git must stay authoritative.
+  #
+  # Ignoring it here silently disables selfHeal for the most common kind of
+  # drift: someone running `kubectl scale` by hand. That change would never be
+  # reverted and the Application would keep reporting Synced, which is worse
+  # than no selfHeal at all - it reports a guarantee it is not providing.
+  #
+  # In the prod overlay, where the HPA exists, the ignore rule belongs back -
+  # but scoped by name to the Deployments the HPA actually targets.
