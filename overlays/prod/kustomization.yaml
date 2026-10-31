@@ -18,7 +18,7 @@ images:
   newTag: main-0cc32d3
 - name: canopy-server
   newName: ghcr.io/ommaheshwari653/canopy-server
-  newTag: main-0000000
+  newTag: main-b6d3124
 
 patches:
 - path: patch-prod.yaml
