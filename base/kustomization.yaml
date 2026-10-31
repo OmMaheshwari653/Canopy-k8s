@@ -11,8 +11,10 @@ resources:
   - server.yaml
   - client.yaml
   - ingress.yaml
-  # secret.example.yaml is deliberately excluded - it is documentation only.
-  # The real Secrets are created by scripts/create-secrets.sh and stay out of Git.
+  # secret.example.yaml is deliberately excluded - it is documentation only,
+  # showing which keys the application expects.
+  # The real values are committed as SealedSecrets in each overlay, because a
+  # SealedSecret is bound to one namespace and cannot be shared across them.
 
 # Applied to every resource. These are the upstream Kubernetes "recommended
 # labels", which make `kubectl get all -l app.kubernetes.io/part-of=canopy` work.
