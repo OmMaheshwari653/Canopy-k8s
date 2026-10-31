@@ -96,12 +96,32 @@ spec:
               memory: 1Gi
 
           # How to ask the database whether it is ready.
+          #
+          # timeoutSeconds is NOT optional here. It defaults to 1 second, and
+          # mongosh is a Node.js CLI that needs longer than that just to start.
+          # With the default, this probe fails whenever the node is briefly
+          # busy, Mongo is dropped from its Service, and the application breaks
+          # for no real reason - observed happening during an image build.
+          #
+          # periodSeconds is 15 rather than 10 because each check spawns a full
+          # mongosh process; polling a database this way is not free.
+          #
+          # A startupProbe covers first boot separately, so initial startup
+          # does not have to fit inside the steady-state thresholds.
+          startupProbe:
+            exec:
+              command:
+                ["mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 24 # 24 x 5s = up to 2 minutes to come up
           readinessProbe:
             exec:
               command:
                 ["mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
-            initialDelaySeconds: 10
-            periodSeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
 
   # *** THIS is the StatefulSet superpower ***
   # volumeClaimTemplates = "create a dedicated PVC for every pod".
