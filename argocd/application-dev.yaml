@@ -1,0 +1,64 @@
+# ============================================================
+#  ARGO CD APPLICATION - the heart of GitOps
+# ============================================================
+# This resource says: "keep this path of this Git repo matched to this
+# namespace of this cluster, always."
+#
+# In push-based CD (what Jenkins/Actions usually do) the pipeline runs
+# `kubectl apply` against the cluster - meaning CI needs admin access to prod.
+# Pull-based (GitOps) inverts that: the controller runs INSIDE the cluster and
+# pulls from Git.
+#
+# That is why this works against a local minikube: GitHub never needs to reach
+# your laptop. It is also exactly why real clusters behind a firewall use the
+# same pattern.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: canopy-dev
+  namespace: argocd
+  # Finalizer: deleting this Application also deletes everything it deployed
+  # (cascading). Without it, orphaned resources are left behind.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/OmMaheshwari653/Canopy-k8s.git
+    targetRevision: main
+    # Argo CD detects the kustomization.yaml here and runs `kustomize build`
+    # on its own. No extra configuration needed.
+    path: overlays/dev
+
+  destination:
+    # https://kubernetes.default.svc = "the same cluster I am running in"
+    server: https://kubernetes.default.svc
+    namespace: canopy
+
+  syncPolicy:
+    automated:
+      # prune: remove a resource from Git and it is removed from the cluster.
+      # Without this, deleted resources linger forever.
+      prune: true
+      # selfHeal: *** the biggest practical win of GitOps ***
+      # If someone changes things by hand with `kubectl scale`/`kubectl edit`,
+      # Argo treats it as DRIFT and restores the state declared in Git.
+      # Git is the truth - "temporary" console fixes do not survive.
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  # Some fields are owned by controllers rather than Git. Ignore them in the
+  # diff, or the Application shows as permanently OutOfSync.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas # the HPA owns this, not Git

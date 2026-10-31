@@ -1,0 +1,26 @@
+# ============================================================
+#  ConfigMap - NON-secret configuration
+# ============================================================
+# Why? Because configuration does not belong inside the image.
+# One image should run in dev, staging and prod - only the config differs.
+# (12-factor app, principle 3: "Store config in the environment")
+#
+# ConfigMap values are plaintext and get committed to Git.
+# Never put a password or key here - that belongs in a Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canopy-server-config
+data:
+  # Every value must be a STRING. Writing 3000 unquoted makes YAML parse it
+  # as an integer and Kubernetes rejects the manifest.
+  PORT: "3000"
+  NODE_ENV: "PRODUCTION"
+
+  # The Ingress serves plain HTTP, so secure cookies are off.
+  # This is the switch added in utils/features.js.
+  COOKIE_SECURE: "false"
+
+  # Used by the server's CORS allow-list. Not strictly needed in a
+  # same-origin setup, but it should still be set.
+  CLIENT_URL: "http://canopy.local"

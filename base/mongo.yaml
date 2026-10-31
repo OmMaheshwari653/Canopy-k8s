@@ -1,0 +1,122 @@
+# ============================================================
+#  HEADLESS SERVICE
+# ============================================================
+# `clusterIP: None` makes this DIFFERENT from a normal Service.
+#
+# Normal Service: gets a virtual IP and load-balances across pods. You never
+#                 know which pod answered.
+# Headless:       no virtual IP. DNS returns the POD IPs directly, and each
+#                 pod gets its own stable DNS name:
+#                     mongo-0.mongo.canopy.svc.cluster.local
+#
+# Databases need this: in a replica set you must know which member is the
+# primary, and that requires addressing individual pods - a load-balanced
+# virtual IP cannot do it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  labels:
+    app: mongo
+spec:
+  clusterIP: None
+  selector:
+    app: mongo
+  ports:
+    - name: mongo
+      port: 27017
+      targetPort: mongo
+---
+# ============================================================
+#  STATEFULSET vs DEPLOYMENT
+# ============================================================
+# A Deployment treats pods as DISPOSABLE: random names
+# (client-7d8b-fshn9), all interchangeable, replaceable in any order.
+# Perfect for stateless apps.
+#
+# For a database that is a disaster. A StatefulSet gives three guarantees:
+#
+#   1. STABLE NAMES   - mongo-0, mongo-1 (no random hash). The name survives
+#                       restarts.
+#   2. STABLE STORAGE - each pod gets its own PVC that outlives the pod.
+#                       When mongo-0 restarts it reattaches to the SAME disk.
+#   3. ORDERED        - mongo-1 is only created once mongo-0 is Ready, which
+#                       is what replica-set bootstrapping requires.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+spec:
+  serviceName: mongo # the headless Service above - this is what builds the DNS
+  replicas: 1 # 1 for learning. (3 would require initiating a replica set.)
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      # Mongo needs time to shut down cleanly (it flushes data).
+      # The 30s default is usually enough, but giving a database more is wise.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: mongo
+          image: mongo:7.0
+          ports:
+            - name: mongo
+              containerPort: 27017
+
+          # On first start Mongo creates the root user from these env vars.
+          # The values come from a Secret - no password appears in this YAML.
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: canopy-mongo
+                  key: MONGO_ROOT_USERNAME
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: canopy-mongo
+                  key: MONGO_ROOT_PASSWORD
+
+          # Mount the PVC here. Mongo writes its data to /data/db, so this
+          # single line is what makes the data persistent.
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+
+          resources:
+            requests: # the scheduler uses THIS to decide where the pod fits
+              cpu: 100m # 100m = 0.1 CPU core
+              memory: 256Mi
+            limits: # going over means: CPU throttling, memory -> OOMKilled
+              cpu: "1"
+              memory: 1Gi
+
+          # How to ask the database whether it is ready.
+          readinessProbe:
+            exec:
+              command:
+                ["mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+  # *** THIS is the StatefulSet superpower ***
+  # volumeClaimTemplates = "create a dedicated PVC for every pod".
+  # mongo-0 gets: data-mongo-0
+  # With replicas 3: data-mongo-0, data-mongo-1, data-mongo-2
+  #
+  # These PVCs are NOT deleted when the StatefulSet is deleted - deliberately.
+  # Kubernetes assumes orphaned volumes are better than accidentally wiping a
+  # database. Cleaning them up is a manual step.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"] # mountable from one node at a time
+        storageClassName: standard # minikube default (hostPath)
+        resources:
+          requests:
+            storage: 2Gi

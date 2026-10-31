@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: canopy-prod
+
+resources:
+  - ../../base
+
+# *** In prod, images come from a REGISTRY and are never tagged `latest` ***
+# The tag is the git commit SHA, which means:
+#   - every deploy is exactly reproducible
+#   - rollback is just setting an older SHA
+#   - CI bumps it automatically
+# With `latest` you cannot even answer "which commit is running in prod?".
+images:
+  - name: canopy-server
+    newName: ghcr.io/ommaheshwari653/canopy-server
+    newTag: main-0000000 # replaced by CI
+  - name: canopy-client
+    newName: ghcr.io/ommaheshwari653/canopy-client
+    newTag: main-0000000
+
+patches:
+  - path: patch-prod.yaml

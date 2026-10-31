@@ -1,0 +1,9 @@
+# A Namespace is a virtual wall inside the cluster.
+# It keeps Canopy's resources from mixing with kube-system or any other app,
+# and `kubectl delete ns canopy` wipes everything in one shot.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: canopy
+  labels:
+    app.kubernetes.io/part-of: canopy

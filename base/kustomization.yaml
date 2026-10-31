@@ -1,0 +1,30 @@
+# Kustomize is "template-free templating" for YAML.
+# Unlike Helm there are no {{ }} placeholders - it takes plain YAML and
+# applies patches on top. Argo CD understands it natively.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - mongo.yaml
+  - server.yaml
+  - client.yaml
+  - ingress.yaml
+  # secret.example.yaml is deliberately excluded - it is documentation only.
+  # The real Secrets are created by scripts/create-secrets.sh and stay out of Git.
+
+# Applied to every resource. These are the upstream Kubernetes "recommended
+# labels", which make `kubectl get all -l app.kubernetes.io/part-of=canopy` work.
+labels:
+  - includeSelectors: false # leave selectors alone, or the Deployment breaks
+    pairs:
+      app.kubernetes.io/part-of: canopy
+      app.kubernetes.io/managed-by: kustomize
+
+# Image tags in one place - overlays override these.
+images:
+  - name: canopy-server
+    newTag: dev
+  - name: canopy-client
+    newTag: dev

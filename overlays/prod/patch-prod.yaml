@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canopy-client
+spec:
+  replicas: 3
+  template:
+    spec:
+      # Spread pods across nodes so a single node failure cannot take the
+      # whole frontend down.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          # ScheduleAnyway (not DoNotSchedule): on a single-node cluster
+          # DoNotSchedule would leave pods stuck in Pending.
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: canopy-client
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canopy-server-config
+data:
+  COOKIE_SECURE: "true" # real HTTPS -> secure cookies back on
+  CLIENT_URL: "https://canopy.example.com"
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: canopy
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  tls:
+    - hosts: [canopy.example.com]
+      secretName: canopy-tls
+  rules:
+    - host: canopy.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service: { name: canopy-server, port: { number: 3000 } }
+          - path: /socket.io
+            pathType: Prefix
+            backend:
+              service: { name: canopy-server, port: { number: 3000 } }
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: canopy-client, port: { number: 80 } }

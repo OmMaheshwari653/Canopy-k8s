@@ -1,0 +1,76 @@
+# ============================================================
+#  INGRESS
+# ============================================================
+# Two separate things are involved, and this is the most common source of
+# confusion:
+#
+#   1. The INGRESS CONTROLLER - an actual nginx pod (in the ingress-nginx
+#      namespace) that receives the traffic. Installed here via a minikube addon.
+#
+#   2. The INGRESS RESOURCE (this file) - only ROUTING RULES. It runs nothing
+#      by itself. The controller reads these rules and generates its own
+#      nginx.conf from them.
+#
+# With no controller installed, this YAML applies successfully and does
+# absolutely nothing - it just sits in the API server. That trips up most
+# newcomers.
+#
+# Why Ingress at all? Otherwise every Service needs its own
+# NodePort/LoadBalancer (expensive, plus awkward 30000+ ports). An Ingress
+# gives one entry point that routes by HOSTNAME and PATH - and TLS, rate
+# limiting and auth are configured in a single place.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: canopy
+  annotations:
+    # *** REQUIRED for WebSockets ***
+    # nginx defaults to a 60s proxy timeout. A Socket.IO connection stays open
+    # for hours - without this the chat would disconnect every 60 seconds.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  # Which controller handles this Ingress. A cluster can run several
+  # (nginx, traefik, a cloud one...).
+  ingressClassName: nginx
+
+  rules:
+    # Host-based routing. The request's 'Host:' header must match this.
+    # A request to http://localhost will NOT match these rules.
+    - host: canopy.local
+      http:
+        paths:
+          # ---- API ----
+          # No rewrite: the server expects /api/v1/... so the path is passed
+          # through unchanged.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: canopy-server
+                port:
+                  number: 3000
+
+          # ---- WEBSOCKET ----
+          # Socket.IO performs its handshake on /socket.io/. Without this rule
+          # that request would reach the frontend nginx, which returns
+          # index.html -> "socket.io parse error" in the browser console.
+          - path: /socket.io
+            pathType: Prefix
+            backend:
+              service:
+                name: canopy-server
+                port:
+                  number: 3000
+
+          # ---- FRONTEND (catch-all) ----
+          # In theory this must come last. In practice nginx-ingress uses
+          # LONGEST PREFIX WINS, so /api and /socket.io win regardless of
+          # order. Writing specific-before-general is still clearer to read.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: canopy-client
+                port:
+                  number: 80

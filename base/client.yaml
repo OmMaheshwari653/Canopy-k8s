@@ -1,0 +1,156 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canopy-client
+  labels:
+    app.kubernetes.io/name: canopy-client
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: canopy
+spec:
+  # *** The selector is the single most important concept in Kubernetes ***
+  # A Deployment does not track pods by name. It says "the pods carrying this
+  # label are mine" and keeps counting them.
+  # The same thread links a Service to its Pods.
+  # If selector and template.labels disagree, the Deployment is created but
+  # never recognises its own pods -> it creates them forever.
+  replicas: 2
+  # Zero-downtime rollout: maxUnavailable 0 means an old pod is only removed
+  # once a new one is Ready. maxSurge 1 allows one extra pod during the roll.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: canopy-client
+  template: # the Pod blueprint
+    metadata:
+      labels:
+        app: canopy-client # must match the selector EXACTLY
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101 # uid baked into the nginx-unprivileged image
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          image: canopy-client:dev
+
+          # *** CRITICAL for locally built images ***
+          # IfNotPresent = "if the node already has the image, use it; do not
+          # pull from a registry". Our image was side-loaded with
+          # `minikube image load` and exists in no registry - with Always
+          # this would fail as ImagePullBackOff.
+          #
+          # Side note: with a `:latest` tag Kubernetes defaults to `Always`
+          # and this would BREAK. That is one more reason never to use
+          # `:latest` in production.
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # With readOnlyRootFilesystem, nginx still needs writable temp dirs.
+          volumeMounts:
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: run
+              mountPath: /tmp
+          # readiness: "should traffic go here?" On failure the pod LEAVES the
+          # Service; it is not restarted. A rolling update waits on this.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            failureThreshold: 3
+          # liveness: "is it alive?" On failure the container is RESTARTED.
+          # That is why its thresholds are looser than readiness - otherwise
+          # temporary slowness pushes the pod into a restart loop.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: cache
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canopy-client
+  labels:
+    app.kubernetes.io/name: canopy-client
+spec:
+  type: ClusterIP
+  selector:
+    app: canopy-client # matches the Deployment's pod label
+  ports:
+    - name: http
+      port: 80 # the port the Service listens on
+      targetPort: http # the container's named port (containerPort 8080)
+---
+# PodDisruptionBudget tells Kubernetes the minimum number of pods that must
+# stay up during VOLUNTARY disruptions (node drain, cluster upgrade).
+# Without it, `kubectl drain` can take down every pod at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: canopy-client
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: canopy-client
+---
+# HPA - replicas scale up and down based on CPU.
+# Requires metrics-server (enabled as a minikube addon).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: canopy-client
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: canopy-client
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # 70% of what? Of `requests.cpu`, NOT of limits.
+          # requests.cpu=25m => scaling up starts around 70% of 25m = 17.5m.
+          averageUtilization: 70
+  behavior:
+    # Scale up fast, scale down slowly - otherwise small dips in traffic make
+    # pods come and go repeatedly ("flapping").
+    scaleDown:
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 30

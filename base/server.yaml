@@ -1,0 +1,158 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canopy-server
+  labels:
+    app.kubernetes.io/name: canopy-server
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: canopy
+spec:
+  # *** replicas 1 is DELIBERATE, and it is a real architectural constraint ***
+  # app.js keeps `userSocketIDs` and `onlineUsers` IN MEMORY (Map/Set).
+  # With two pods, a user on pod A cannot message a user on pod B - each pod
+  # holds its own copy of that state.
+  #
+  # Scaling horizontally requires the Socket.IO Redis adapter
+  # (@socket.io/redis-adapter), which pub/subs events between pods.
+  # Until that exists, putting an HPA on this Deployment is a bug, not a feature.
+  replicas: 1
+  # Zero-downtime rollout: maxUnavailable 0 means an old pod is only removed
+  # once a new one is Ready. maxSurge 1 allows one extra pod during the roll.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: canopy-server
+  template:
+    metadata:
+      labels:
+        app: canopy-server
+    spec:
+      # Time Express gets to finish in-flight requests after SIGTERM.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000 # the 'node' user in the node image
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # ---- INIT CONTAINER ----
+      # Runs BEFORE the main container and blocks until it succeeds.
+      # Without it: the server starts, Mongo is not up yet, connectDB throws,
+      # the process crashes -> CrashLoopBackOff. It would eventually work
+      # (Kubernetes keeps retrying) but the logs are noisy and startup is slow.
+      # This is the standard "wait for a dependency" pattern.
+      initContainers:
+        - name: wait-for-mongo
+          image: busybox:1.36
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z mongo 27017; do
+                echo "waiting for mongo..."; sleep 2
+              done
+              echo "mongo is up"
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+      containers:
+        - name: server
+          image: canopy-server:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Safe here: multer uses MemoryStorage, so nothing is written to disk.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+          # ---- CONFIG INJECTION ----
+          # envFrom turns every key in a ConfigMap/Secret into an env var.
+          # (Per-key `env:` + valueFrom also works - use that when the name
+          #  needs to change, as done for Mongo.)
+          #
+          # The real point: the application code did not change at all. It
+          # still reads process.env.MONGO_URI. That value now comes from the
+          # cluster instead of a .env file.
+          envFrom:
+            - configMapRef:
+                name: canopy-server-config
+            - secretRef:
+                name: canopy-server-secrets
+
+          # startupProbe: for apps that boot slowly. Until it passes,
+          # liveness and readiness DO NOT RUN AT ALL.
+          # Without it you face a dilemma: a short liveness initialDelay means
+          # restart loops on slow starts, a long one means real crashes take
+          # ages to detect. The startup probe removes both problems.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20 # 20 x 3s = 60s budget to boot
+          readinessProbe:
+            # /readyz checks the Mongo connection -> if Mongo breaks the pod
+            # leaves the Service instead of restarting, and rejoins by itself
+            # once Mongo is back.
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            # /healthz deliberately does NOT check the DB. If it did, one
+            # minute of Mongo downtime would restart every API pod - which
+            # fixes nothing and only makes the outage longer.
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# A Service gives the pods behind it one stable address.
+# Pods are mortal: their IPs change on delete, restart and scale. A Service
+# provides a permanent IP plus DNS name and keeps tracking the pods behind it,
+# which is why nothing ever hardcodes a Pod IP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: canopy-server
+  labels:
+    app.kubernetes.io/name: canopy-server
+spec:
+  # ClusterIP = reachable only from inside the cluster (the default).
+  # External access comes through the Ingress - exposing every Service
+  # directly is an anti-pattern.
+  type: ClusterIP
+  selector:
+    app: canopy-server
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

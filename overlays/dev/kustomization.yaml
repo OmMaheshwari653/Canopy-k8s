@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: canopy
+
+resources:
+  - ../../base
+
+# Local images, side-loaded with `minikube image load`.
+images:
+  - name: canopy-server
+    newTag: dev
+  - name: canopy-client
+    newTag: dev
+
+patches:
+  - path: patch-dev.yaml
+  # No HPA in dev - on a laptop it only burns resources and stops you from
+  # setting replicas by hand.
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: canopy-client
+    patch: |
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: canopy-client

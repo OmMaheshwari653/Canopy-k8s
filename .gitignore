@@ -1,0 +1,7 @@
+# Real Secrets are never committed - only base/secret.example.yaml with
+# placeholders. The real values are produced by scripts/create-secrets.sh.
+*-secret.yaml
+!*secret.example.yaml
+*.secret.yaml
+.env
+.DS_Store

@@ -1,0 +1,17 @@
+# Strategic-merge patch: list only the fields that change; everything else is
+# inherited from base.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canopy-client
+spec:
+  replicas: 1 # two frontend pods are pointless on a laptop
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canopy-server-config
+data:
+  # The minikube Ingress serves plain HTTP -> secure cookies off
+  COOKIE_SECURE: "false"
+  CLIENT_URL: "http://canopy.local"
